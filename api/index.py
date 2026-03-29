@@ -31,23 +31,24 @@ class handler(BaseHTTPRequestHandler):
             
             p_id, p_name, exam_name = "UNKNOWN", "UNKNOWN", "UNKNOWN"
             
-            # --- નવું ડબલ-ચેક લોજીક (તમારા Pydroid આઉટપુટ મુજબ) ---
-            for el in soup.find_all(['td', 'th']):
-                text = el.get_text(strip=True).upper()
-                if 'PARTICIPANT ID' in text:
-                    nxt = el.find_next_sibling(['td', 'th'])
-                    if nxt: p_id = nxt.get_text(strip=True)
-                elif 'PARTICIPANT NAME' in text:
-                    nxt = el.find_next_sibling(['td', 'th'])
-                    if nxt: p_name = nxt.get_text(strip=True)
-                elif 'SUBJECT' in text:
-                    nxt = el.find_next_sibling(['td', 'th'])
-                    if nxt: exam_name = nxt.get_text(strip=True)
+            # 🚀 PRO MAX LOGIC: Table ની આખી લાઈન (Row) વાંચવાની રીત
+            for row in soup.find_all('tr'):
+                # આડી લાઈનના બધા જ ખાનાઓનો ટેક્સ્ટ કાઢીને લિસ્ટ બનાવી લીધું
+                cells = [td.get_text(strip=True) for td in row.find_all(['td', 'th']) if td.get_text(strip=True)]
+                
+                if len(cells) >= 2:
+                    for i in range(len(cells)-1):
+                        key = cells[i].upper()
+                        val = cells[i+1]
+                        
+                        if 'PARTICIPANT ID' in key and p_id == "UNKNOWN": p_id = val
+                        elif 'PARTICIPANT NAME' in key and p_name == "UNKNOWN": p_name = val
+                        elif 'SUBJECT' in key and exam_name == "UNKNOWN": exam_name = val
 
-            # જો હજુ પણ ખાલી રહે, તો Regex થી ફોર્સફુલી ખેંચી લાવીએ
+            # 🚀 Hardcore Regex Fallback (જો હજુ પણ કઈ રહી જાય તો)
             if exam_name == "UNKNOWN":
-                m = re.search(r'Subject.*?<(?:td|th)[^>]*>(.*?)</(?:td|th)>', html_text, re.I | re.S)
-                if m: exam_name = re.sub(r'<[^>]+>', '', m.group(1)).strip()
+                m_subj = re.search(r'>\s*Subject\s*<.*?>\s*(.*?)\s*<', html_text, re.I)
+                if m_subj: exam_name = m_subj.group(1).strip()
 
             parsed_questions = {}
             qid_tds = soup.find_all('td', string=re.compile(r'Question ID\s*:?'))
@@ -87,9 +88,11 @@ class handler(BaseHTTPRequestHandler):
                 except Exception:
                     continue
             
+            # JSON માં કુલ પ્રશ્નો (total_q) પણ મોકલીએ છીએ જેથી ભવિષ્યમાં Part A/B ઓટોમેટિક થઈ શકે!
             result = {
                 "status": "success", 
                 "meta": { "p_id": p_id, "p_name": p_name, "exam_name": exam_name },
+                "total_q": len(parsed_questions),
                 "questions": parsed_questions
             }
             self.wfile.write(json.dumps(result).encode('utf-8'))
