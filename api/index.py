@@ -29,11 +29,10 @@ class handler(BaseHTTPRequestHandler):
             html_text = res.text
             soup = BeautifulSoup(html_text, 'html.parser')
             
-            # --- નવું 100% Bulletproof Extraction લોજીક ---
             p_id, p_name, exam_name = "UNKNOWN", "UNKNOWN", "UNKNOWN"
             
-            th_td_elements = soup.find_all(['td', 'th'])
-            for el in th_td_elements:
+            # --- નવું ડબલ-ચેક લોજીક (તમારા Pydroid આઉટપુટ મુજબ) ---
+            for el in soup.find_all(['td', 'th']):
                 text = el.get_text(strip=True).upper()
                 if 'PARTICIPANT ID' in text:
                     nxt = el.find_next_sibling(['td', 'th'])
@@ -41,9 +40,14 @@ class handler(BaseHTTPRequestHandler):
                 elif 'PARTICIPANT NAME' in text:
                     nxt = el.find_next_sibling(['td', 'th'])
                     if nxt: p_name = nxt.get_text(strip=True)
-                elif 'SUBJECT' in text: # અહી આપણે Subject જ ગોતીએ છીએ
+                elif 'SUBJECT' in text:
                     nxt = el.find_next_sibling(['td', 'th'])
                     if nxt: exam_name = nxt.get_text(strip=True)
+
+            # જો હજુ પણ ખાલી રહે, તો Regex થી ફોર્સફુલી ખેંચી લાવીએ
+            if exam_name == "UNKNOWN":
+                m = re.search(r'Subject.*?<(?:td|th)[^>]*>(.*?)</(?:td|th)>', html_text, re.I | re.S)
+                if m: exam_name = re.sub(r'<[^>]+>', '', m.group(1)).strip()
 
             parsed_questions = {}
             qid_tds = soup.find_all('td', string=re.compile(r'Question ID\s*:?'))
