@@ -7,13 +7,11 @@ import traceback
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
-            # 1. સૌથી પહેલા રિસ્પોન્સ મોકલી દઈએ જેથી 500 ની એરર ના આવે
             self.send_response(200)
             self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Content-type', 'application/json')
             self.end_headers()
 
-            # 2. લાઈબ્રેરીઓને અહીં અંદર IMPORT કરીએ, જેથી જો એરર હોય તો પકડાઈ જાય!
             import requests
             from bs4 import BeautifulSoup
 
@@ -28,7 +26,25 @@ class handler(BaseHTTPRequestHandler):
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
             res = requests.get(target_url, headers=headers, timeout=15)
             
-            soup = BeautifulSoup(res.text, 'html.parser')
+            html_text = res.text
+            soup = BeautifulSoup(html_text, 'html.parser')
+            
+            # --- નવું 100% Bulletproof Extraction લોજીક ---
+            p_id, p_name, exam_name = "UNKNOWN", "UNKNOWN", "UNKNOWN"
+            
+            th_td_elements = soup.find_all(['td', 'th'])
+            for el in th_td_elements:
+                text = el.get_text(strip=True).upper()
+                if 'PARTICIPANT ID' in text:
+                    nxt = el.find_next_sibling(['td', 'th'])
+                    if nxt: p_id = nxt.get_text(strip=True)
+                elif 'PARTICIPANT NAME' in text:
+                    nxt = el.find_next_sibling(['td', 'th'])
+                    if nxt: p_name = nxt.get_text(strip=True)
+                elif 'SUBJECT' in text: # અહી આપણે Subject જ ગોતીએ છીએ
+                    nxt = el.find_next_sibling(['td', 'th'])
+                    if nxt: exam_name = nxt.get_text(strip=True)
+
             parsed_questions = {}
             qid_tds = soup.find_all('td', string=re.compile(r'Question ID\s*:?'))
             
@@ -67,11 +83,14 @@ class handler(BaseHTTPRequestHandler):
                 except Exception:
                     continue
             
-            result = {"status": "success", "questions": parsed_questions}
+            result = {
+                "status": "success", 
+                "meta": { "p_id": p_id, "p_name": p_name, "exam_name": exam_name },
+                "questions": parsed_questions
+            }
             self.wfile.write(json.dumps(result).encode('utf-8'))
 
         except Exception as e:
-            # હવે જો requests કે bs4 નહિ હોય, તો તે 500 ક્રેશ થવાને બદલે અહીં JSON માં એરર બતાવશે!
             error_trace = traceback.format_exc()
             self.wfile.write(json.dumps({
                 "status": "error", 
