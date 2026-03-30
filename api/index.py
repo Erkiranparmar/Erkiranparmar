@@ -51,7 +51,7 @@ class handler(BaseHTTPRequestHandler):
             total_questions_count = 0
             current_section = "General"
 
-            # 2. 🚀 NEW BULLETPROOF LOGIC: Flat Sequential Scan 
+            # 2. 🚀 BULLETPROOF LOGIC: Flat Sequential Scan 
             # This fixes the website's broken HTML by ignoring strict nesting!
             for tag in soup.find_all(['div', 'table'], class_=re.compile(r'section-lbl|question-pnl', re.I)):
                 
@@ -70,7 +70,7 @@ class handler(BaseHTTPRequestHandler):
                         menu_tbl = tag.find('table', class_='menu-tbl')
                         if not menu_tbl: continue
                         
-                        # 🚀 NEW FLAT TD EXTRACTION: This fixes the floating "Chosen Option" <td> bug
+                        # 🚀 FLAT TD EXTRACTION: This fixes the floating "Chosen Option" <td> bug
                         menu_tds = menu_tbl.find_all('td')
                         cells = [td.get_text(strip=True) for td in menu_tds]
                         
@@ -106,8 +106,8 @@ class handler(BaseHTTPRequestHandler):
                         if row_tbl:
                             right_ans_td = row_tbl.find('td', class_='rightAns')
                             if right_ans_td:
-                                # Extract correct option number
-                                m = re.search(r'^([1-4])\.', right_ans_td.get_text(strip=True))
+                                # 🚀 FIXED REGEX: Removed '^' to handle hidden spaces (fixes comprehension questions)
+                                m = re.search(r'([1-4])\.', right_ans_td.get_text(strip=True))
                                 if m and m.group(1) in opts:
                                     prov_right_id = opts[m.group(1)]
                         
@@ -138,4 +138,4 @@ class handler(BaseHTTPRequestHandler):
                 "error_message": str(e), 
                 "trace": error_trace
             }).encode('utf-8'))
-            
+                        
