@@ -31,11 +31,11 @@ class handler(BaseHTTPRequestHandler):
             
             p_id, p_name, exam_name = "UNKNOWN", "UNKNOWN", "UNKNOWN"
             
-            # 1. 🚀 PRO MAX LOGIC: Extract Meta Data from main-info-pnl
+            # 1. 🚀 Extract Meta Data
             main_info = soup.find('div', class_='main-info-pnl')
             if main_info:
                 for row in main_info.find_all('tr'):
-                    cells = [td.get_text(strip=True) for td in row.find_all('td')]
+                    cells = [td.get_text(strip=True) for td in row.find_all(['td', 'th'])]
                     if len(cells) >= 2:
                         key = cells[0].upper()
                         val = cells[1]
@@ -43,68 +43,76 @@ class handler(BaseHTTPRequestHandler):
                         elif 'PARTICIPANT NAME' in key: p_name = val
                         elif 'SUBJECT' in key: exam_name = val
 
-            # Hardcore Regex Fallback for Subject
             if exam_name == "UNKNOWN":
                 m_subj = re.search(r'>\s*Subject\s*<.*?>\s*(.*?)\s*<', html_text, re.I)
                 if m_subj: exam_name = m_subj.group(1).strip()
 
             all_sections_data = {}
             total_questions_count = 0
+            current_section = "General"
 
-            # 2. 🚀 NEW LOGIC: Loop through Parts/Sections (Part A, Part B, etc.)
-            for section in soup.find_all('div', class_='section-cntnr'):
-                # Get the section name (e.g., "Part A Reasoning...")
-                sec_lbl = section.find('div', class_='section-lbl')
-                if sec_lbl:
-                    sec_name_tag = sec_lbl.find(class_='bold')
-                    section_name = sec_name_tag.text.strip() if sec_name_tag else "General"
-                else:
-                    section_name = "General"
-
-                parsed_questions = {}
-
-                # 3. 🚀 Loop through Questions ONLY inside this section
-                for q_pnl in section.find_all('div', class_='question-pnl'):
+            # 2. 🚀 NEW BULLETPROOF LOGIC: Flat Sequential Scan 
+            # This fixes the website's broken HTML by ignoring strict nesting!
+            for tag in soup.find_all(['div', 'table'], class_=re.compile(r'section-lbl|question-pnl', re.I)):
+                
+                classes = tag.get('class', [])
+                
+                # A. If it is a Section Label, update the section name
+                if any('section-lbl' in c.lower() for c in classes):
+                    sec_name_tag = tag.find(class_='bold')
+                    if sec_name_tag:
+                        current_section = sec_name_tag.text.strip()
+                    continue
+                
+                # B. If it is a Question Panel, parse it
+                if any('question-pnl' in c.lower() for c in classes):
                     try:
-                        # --- A. Get Data from Right Menu Table (menu-tbl) ---
-                        menu_tbl = q_pnl.find('table', class_='menu-tbl')
+                        menu_tbl = tag.find('table', class_='menu-tbl')
                         if not menu_tbl: continue
+                        
+                        # 🚀 NEW FLAT TD EXTRACTION: This fixes the floating "Chosen Option" <td> bug
+                        menu_tds = menu_tbl.find_all('td')
+                        cells = [td.get_text(strip=True) for td in menu_tds]
                         
                         qid = None
                         opts = {}
                         chosen_id = "-"
                         
-                        for row in menu_tbl.find_all('tr'):
-                            cells = [td.get_text(strip=True) for td in row.find_all('td')]
-                            if len(cells) == 2:
-                                label = cells[0]
-                                val = cells[1]
-                                
-                                if 'Question ID' in label: qid = val
-                                elif 'Option 1 ID' in label: opts['1'] = val
-                                elif 'Option 2 ID' in label: opts['2'] = val
-                                elif 'Option 3 ID' in label: opts['3'] = val
-                                elif 'Option 4 ID' in label: opts['4'] = val
-                                elif 'Chosen Option' in label:
-                                    # If student chose 1, 2, 3, or 4, map it to ID. If "--", it stays "-"
-                                    if val in opts: chosen_id = opts[val]
-
+                        # Read adjacent cells to bypass missing <tr> tags
+                        for i in range(len(cells) - 1):
+                            label = cells[i]
+                            val = cells[i+1]
+                            
+                            if 'Question ID' in label: qid = val
+                            elif 'Option 1 ID' in label: opts['1'] = val
+                            elif 'Option 2 ID' in label: opts['2'] = val
+                            elif 'Option 3 ID' in label: opts['3'] = val
+                            elif 'Option 4 ID' in label: opts['4'] = val
+                            elif 'Chosen Option' in label:
+                                if val in opts: chosen_id = opts[val]
+                        
                         if not qid or not qid.isdigit(): continue
-
-                        # --- B. Get Correct Answer from Left Table (questionRowTbl) ---
+                        
+                        # Create section array if not exists
+                        if current_section not in all_sections_data:
+                            all_sections_data[current_section] = {}
+                            
+                        # Skip exact duplicate questions if any
+                        if qid in all_sections_data[current_section]:
+                            continue
+                        
                         prov_right_id = "-"
-                        row_tbl = q_pnl.find('table', class_='questionRowTbl')
+                        row_tbl = tag.find('table', class_='questionRowTbl')
                         if row_tbl:
-                            # Website uses class="rightAns" for the correct option
                             right_ans_td = row_tbl.find('td', class_='rightAns')
                             if right_ans_td:
-                                # Extract "3" from "3. વહેતા પાણીના..."
+                                # Extract correct option number
                                 m = re.search(r'^([1-4])\.', right_ans_td.get_text(strip=True))
                                 if m and m.group(1) in opts:
                                     prov_right_id = opts[m.group(1)]
-
+                        
                         # Save the question
-                        parsed_questions[qid] = {
+                        all_sections_data[current_section][qid] = {
                             "chosen_id": chosen_id, 
                             "prov_right_id": prov_right_id
                         }
@@ -112,12 +120,8 @@ class handler(BaseHTTPRequestHandler):
                         
                     except Exception:
                         continue
-                
-                # If section had valid questions, add it to our main dictionary
-                if parsed_questions:
-                    all_sections_data[section_name] = parsed_questions
 
-            # 4. 🚀 Prepare Final Output with Sections
+            # 3. Output Final JSON
             result = {
                 "status": "success", 
                 "meta": { "p_id": p_id, "p_name": p_name, "exam_name": exam_name },
