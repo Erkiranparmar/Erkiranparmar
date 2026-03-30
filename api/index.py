@@ -23,7 +23,7 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             target_url = params['url'][0]
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'}
             res = requests.get(target_url, headers=headers, timeout=15)
             
             html_text = res.text
@@ -31,70 +31,100 @@ class handler(BaseHTTPRequestHandler):
             
             p_id, p_name, exam_name = "UNKNOWN", "UNKNOWN", "UNKNOWN"
             
-            # 🚀 PRO MAX LOGIC: Table ની આખી લાઈન (Row) વાંચવાની રીત
-            for row in soup.find_all('tr'):
-                # આડી લાઈનના બધા જ ખાનાઓનો ટેક્સ્ટ કાઢીને લિસ્ટ બનાવી લીધું
-                cells = [td.get_text(strip=True) for td in row.find_all(['td', 'th']) if td.get_text(strip=True)]
-                
-                if len(cells) >= 2:
-                    for i in range(len(cells)-1):
-                        key = cells[i].upper()
-                        val = cells[i+1]
-                        
-                        if 'PARTICIPANT ID' in key and p_id == "UNKNOWN": p_id = val
-                        elif 'PARTICIPANT NAME' in key and p_name == "UNKNOWN": p_name = val
-                        elif 'SUBJECT' in key and exam_name == "UNKNOWN": exam_name = val
+            # 1. 🚀 PRO MAX LOGIC: Extract Meta Data from main-info-pnl
+            main_info = soup.find('div', class_='main-info-pnl')
+            if main_info:
+                for row in main_info.find_all('tr'):
+                    cells = [td.get_text(strip=True) for td in row.find_all('td')]
+                    if len(cells) >= 2:
+                        key = cells[0].upper()
+                        val = cells[1]
+                        if 'PARTICIPANT ID' in key: p_id = val
+                        elif 'PARTICIPANT NAME' in key: p_name = val
+                        elif 'SUBJECT' in key: exam_name = val
 
-            # 🚀 Hardcore Regex Fallback (જો હજુ પણ કઈ રહી જાય તો)
+            # Hardcore Regex Fallback for Subject
             if exam_name == "UNKNOWN":
                 m_subj = re.search(r'>\s*Subject\s*<.*?>\s*(.*?)\s*<', html_text, re.I)
                 if m_subj: exam_name = m_subj.group(1).strip()
 
-            parsed_questions = {}
-            qid_tds = soup.find_all('td', string=re.compile(r'Question ID\s*:?'))
-            
-            for td in qid_tds:
-                try:
-                    qid_sibling = td.find_next_sibling('td')
-                    if not qid_sibling: continue
-                    qid = qid_sibling.text.strip()
-                    if not qid.isdigit(): continue
+            all_sections_data = {}
+            total_questions_count = 0
 
-                    container = td.find_parent(class_=re.compile(r'question-pnl|questionPnlTbl', re.I))
-                    if not container:
-                        menu_tbl = td.find_parent('table', class_='menu-tbl')
-                        if menu_tbl: container = menu_tbl.find_parent('table')
-                    if not container: continue
+            # 2. 🚀 NEW LOGIC: Loop through Parts/Sections (Part A, Part B, etc.)
+            for section in soup.find_all('div', class_='section-cntnr'):
+                # Get the section name (e.g., "Part A Reasoning...")
+                sec_lbl = section.find('div', class_='section-lbl')
+                if sec_lbl:
+                    sec_name_tag = sec_lbl.find(class_='bold')
+                    section_name = sec_name_tag.text.strip() if sec_name_tag else "General"
+                else:
+                    section_name = "General"
 
-                    opts = {}
-                    for i in range(1, 5):
-                        opt_td = container.find('td', string=re.compile(rf'Option {i} ID\s*:?'))
-                        if opt_td and opt_td.find_next_sibling('td'):
-                            opts[str(i)] = opt_td.find_next_sibling('td').text.strip()
-                    
-                    prov_right_id = "-"
-                    right_ans = container.find(class_='rightAns')
-                    if right_ans:
-                        m = re.search(r'^([1-4])\.', right_ans.get_text(strip=True))
-                        if m and m.group(1) in opts: prov_right_id = opts[m.group(1)]
-                    
-                    chosen_id = "-"
-                    chosen_td = container.find('td', string=re.compile(r'Chosen Option\s*:?'))
-                    if chosen_td and chosen_td.find_next_sibling('td'):
-                        ch_num = chosen_td.find_next_sibling('td').text.strip()
-                        if ch_num in opts: chosen_id = opts[ch_num]
+                parsed_questions = {}
 
-                    parsed_questions[qid] = {"chosen_id": chosen_id, "prov_right_id": prov_right_id}
-                except Exception:
-                    continue
-            
-            # JSON માં કુલ પ્રશ્નો (total_q) પણ મોકલીએ છીએ જેથી ભવિષ્યમાં Part A/B ઓટોમેટિક થઈ શકે!
+                # 3. 🚀 Loop through Questions ONLY inside this section
+                for q_pnl in section.find_all('div', class_='question-pnl'):
+                    try:
+                        # --- A. Get Data from Right Menu Table (menu-tbl) ---
+                        menu_tbl = q_pnl.find('table', class_='menu-tbl')
+                        if not menu_tbl: continue
+                        
+                        qid = None
+                        opts = {}
+                        chosen_id = "-"
+                        
+                        for row in menu_tbl.find_all('tr'):
+                            cells = [td.get_text(strip=True) for td in row.find_all('td')]
+                            if len(cells) == 2:
+                                label = cells[0]
+                                val = cells[1]
+                                
+                                if 'Question ID' in label: qid = val
+                                elif 'Option 1 ID' in label: opts['1'] = val
+                                elif 'Option 2 ID' in label: opts['2'] = val
+                                elif 'Option 3 ID' in label: opts['3'] = val
+                                elif 'Option 4 ID' in label: opts['4'] = val
+                                elif 'Chosen Option' in label:
+                                    # If student chose 1, 2, 3, or 4, map it to ID. If "--", it stays "-"
+                                    if val in opts: chosen_id = opts[val]
+
+                        if not qid or not qid.isdigit(): continue
+
+                        # --- B. Get Correct Answer from Left Table (questionRowTbl) ---
+                        prov_right_id = "-"
+                        row_tbl = q_pnl.find('table', class_='questionRowTbl')
+                        if row_tbl:
+                            # Website uses class="rightAns" for the correct option
+                            right_ans_td = row_tbl.find('td', class_='rightAns')
+                            if right_ans_td:
+                                # Extract "3" from "3. વહેતા પાણીના..."
+                                m = re.search(r'^([1-4])\.', right_ans_td.get_text(strip=True))
+                                if m and m.group(1) in opts:
+                                    prov_right_id = opts[m.group(1)]
+
+                        # Save the question
+                        parsed_questions[qid] = {
+                            "chosen_id": chosen_id, 
+                            "prov_right_id": prov_right_id
+                        }
+                        total_questions_count += 1
+                        
+                    except Exception:
+                        continue
+                
+                # If section had valid questions, add it to our main dictionary
+                if parsed_questions:
+                    all_sections_data[section_name] = parsed_questions
+
+            # 4. 🚀 Prepare Final Output with Sections
             result = {
                 "status": "success", 
                 "meta": { "p_id": p_id, "p_name": p_name, "exam_name": exam_name },
-                "total_q": len(parsed_questions),
-                "questions": parsed_questions
+                "total_q": total_questions_count,
+                "sections": all_sections_data
             }
+            
             self.wfile.write(json.dumps(result).encode('utf-8'))
 
         except Exception as e:
